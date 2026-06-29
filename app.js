@@ -1,169 +1,124 @@
-const $ = (id) => document.getElementById(id);
-const storageKey = "simple_inventory_v2";
-let records = JSON.parse(localStorage.getItem(storageKey) || "[]");
+const DB_KEY = 'zaikoProDataV1';
+let data = JSON.parse(localStorage.getItem(DB_KEY) || '{"products":[],"history":[]}');
+let currentProduct = null;
 let stream = null;
 let detector = null;
 let scanning = false;
-let scanTimer = null;
 
-function saveStorage() {
-  localStorage.setItem(storageKey, JSON.stringify(records));
+const $ = id => document.getElementById(id);
+const saveDB = () => localStorage.setItem(DB_KEY, JSON.stringify(data));
+const now = () => new Date().toLocaleString('ja-JP');
+const toast = msg => { const t=$('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',2200); };
+
+function csvEscape(v){ return '"' + String(v ?? '').replaceAll('"','""') + '"'; }
+function downloadCSV(filename, rows){
+  const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
+  const blob = new Blob(['\ufeff' + csv], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+}
+function exportStock(){
+  downloadCSV('zaiko_stock.csv', [['バーコード','商品名','SKU','在庫数','保管場所'], ...data.products.map(p=>[p.barcode,p.name,p.sku,p.stock,p.location])]);
+}
+function exportHistory(){
+  downloadCSV('zaiko_history.csv', [['日時','処理','バーコード','商品名','数量','処理前','処理後','メモ'], ...data.history.map(h=>[h.date,h.action,h.barcode,h.name,h.qty,h.before,h.after,h.memo])]);
+}
+function exportAll(){ exportStock(); setTimeout(exportHistory, 400); }
+
+function setView(id){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  $(id).classList.add('active'); document.querySelector(`[data-view="${id}"]`).classList.add('active');
+  render();
 }
 
-function showMessage(text) {
-  $("message").textContent = text;
-  setTimeout(() => { $("message").textContent = ""; }, 2400);
-}
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setView(b.dataset.view));
 
-function setHelp(text) {
-  $("cameraHelp").textContent = text || "";
-}
-
-function render() {
-  const list = $("list");
-  list.innerHTML = "";
-  if (records.length === 0) {
-    list.innerHTML = `<tr><td colspan="3">まだ入力がありません</td></tr>`;
+function findProduct(barcode){ return data.products.find(p => p.barcode === String(barcode).trim()); }
+function selectProduct(barcode){
+  const bc = String(barcode).trim();
+  $('barcodeInput').value = bc;
+  const p = findProduct(bc);
+  if(!p){
+    currentProduct = null;
+    $('currentName').textContent = '未登録の商品';
+    $('currentMeta').textContent = `バーコード：${bc}。商品マスタで登録してください。`;
+    $('currentStock').textContent = '-';
+    $('masterBarcode').value = bc;
+    toast('未登録です。商品マスタにバーコードを入れました');
     return;
   }
-  records.forEach((item) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${escapeHtml(item.barcode)}</td><td>${escapeHtml(item.name)}</td><td>${item.qty}</td>`;
-    list.appendChild(tr);
-  });
+  currentProduct = p;
+  $('currentName').textContent = p.name;
+  $('currentMeta').textContent = `バーコード：${p.barcode} / SKU：${p.sku || '-'} / 場所：${p.location || '-'}`;
+  $('currentStock').textContent = p.stock;
+  toast('商品を読み取りました');
 }
 
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>'"]/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
-  }[c]));
+function saveStock(){
+  if(!currentProduct){ toast('先に商品を選択してください'); return; }
+  const qty = Number($('qtyInput').value);
+  if(!Number.isFinite(qty) || qty < 0){ toast('数量を入力してください'); return; }
+  const action = $('actionType').value;
+  const before = Number(currentProduct.stock || 0);
+  let after = before;
+  if(action === 'count') after = qty;
+  if(action === 'in') after = before + qty;
+  if(action === 'out') after = Math.max(0, before - qty);
+  if(action === 'adjust') after = before + qty;
+  currentProduct.stock = after;
+  data.history.unshift({date:now(), action, barcode:currentProduct.barcode, name:currentProduct.name, qty, before, after, memo:$('memoInput').value});
+  saveDB(); $('qtyInput').value=''; $('memoInput').value=''; selectProduct(currentProduct.barcode); render(); toast('在庫を保存しました');
 }
 
-function clearForm() {
-  $("barcode").value = "";
-  $("name").value = "";
-  $("qty").value = "";
-  $("barcode").focus();
+function saveMaster(){
+  const barcode = $('masterBarcode').value.trim();
+  const name = $('masterName').value.trim();
+  if(!barcode || !name){ toast('バーコードと商品名は必須です'); return; }
+  let p = findProduct(barcode);
+  if(!p){ p = {barcode, name, sku:'', stock:0, location:''}; data.products.push(p); }
+  p.name = name; p.sku = $('masterSku').value.trim(); p.stock = Number($('masterStock').value || p.stock || 0); p.location = $('masterLocation').value.trim();
+  saveDB(); render(); toast('商品マスタを保存しました');
 }
 
-$("saveBtn").addEventListener("click", () => {
-  const barcode = $("barcode").value.trim();
-  const name = $("name").value.trim();
-  const qty = Number($("qty").value);
-
-  if (!barcode) return showMessage("バーコードを入力してください");
-  if (!name) return showMessage("商品名を入力してください");
-  if (!Number.isFinite(qty)) return showMessage("在庫数を入力してください");
-
-  const existing = records.find((r) => r.barcode === barcode);
-  if (existing) {
-    existing.name = name;
-    existing.qty = qty;
-    existing.updatedAt = new Date().toLocaleString("ja-JP");
-  } else {
-    records.unshift({ barcode, name, qty, updatedAt: new Date().toLocaleString("ja-JP") });
-  }
-  saveStorage();
-  render();
-  clearForm();
-  showMessage("保存しました");
-});
-
-$("exportBtn").addEventListener("click", () => {
-  if (records.length === 0) return showMessage("出力するデータがありません");
-  const header = ["バーコード", "商品名", "在庫数", "更新日時"];
-  const rows = records.map((r) => [r.barcode, r.name, r.qty, r.updatedAt]);
-  const csv = [header, ...rows]
-    .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
-    .join("\n");
-  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `在庫一覧_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
-
-$("clearBtn").addEventListener("click", () => {
-  if (!confirm("入力済みデータを全部削除しますか？")) return;
-  records = [];
-  saveStorage();
-  render();
-});
-
-async function startCameraScan() {
-  try {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setHelp("この開き方ではカメラが使えません。Chromeで開くか、HTTPS/localhostで表示してください。");
-      return;
-    }
-
-    if (!("BarcodeDetector" in window)) {
-      setHelp("このスマホ/ブラウザはバーコード読取に未対応です。AndroidのChrome最新版で試してください。手入力は使えます。");
-      return;
-    }
-
-    detector = new BarcodeDetector({
-      formats: ["ean_13", "ean_8", "code_128", "code_39", "code_93", "itf", "qr_code", "upc_a", "upc_e"]
-    });
-
-    $("cameraBox").hidden = false;
-    $("stopScanBtn").hidden = false;
-    setHelp("カメラをバーコードに近づけてください。読み取ると自動で止まります。");
-
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false
-    });
-
-    const video = $("preview");
-    video.srcObject = stream;
-    await video.play();
-    scanning = true;
-    scanLoop();
-  } catch (err) {
-    stopScan();
-    if (location.protocol === "file:") {
-      setHelp("ファイルを直接開くとカメラが起動しない場合があります。Chromeで開く、またはHTTPS/localhostに置いて使ってください。");
-    } else {
-      setHelp("カメラを起動できませんでした。ブラウザのカメラ許可をオンにしてください。");
-    }
-  }
+function render(){
+  $('productsTable').innerHTML = '<tr><th>バーコード</th><th>商品名</th><th>SKU</th><th>在庫</th><th>場所</th></tr>' + data.products.map(p=>`<tr><td>${p.barcode}</td><td>${p.name}</td><td>${p.sku||''}</td><td>${p.stock}</td><td>${p.location||''}</td></tr>`).join('');
+  const q = $('stockSearch')?.value?.toLowerCase() || '';
+  const ps = data.products.filter(p => [p.barcode,p.name,p.sku,p.location].join(' ').toLowerCase().includes(q));
+  $('stockTable').innerHTML = '<tr><th>バーコード</th><th>商品名</th><th>在庫</th><th>場所</th></tr>' + ps.map(p=>`<tr><td>${p.barcode}</td><td>${p.name}</td><td><b>${p.stock}</b></td><td>${p.location||''}</td></tr>`).join('');
+  $('historyTable').innerHTML = '<tr><th>日時</th><th>処理</th><th>商品名</th><th>数量</th><th>前</th><th>後</th><th>メモ</th></tr>' + data.history.map(h=>`<tr><td>${h.date}</td><td>${h.action}</td><td>${h.name}</td><td>${h.qty}</td><td>${h.before}</td><td>${h.after}</td><td>${h.memo||''}</td></tr>`).join('');
 }
 
-async function scanLoop() {
-  if (!scanning) return;
-  try {
-    const video = $("preview");
-    const codes = await detector.detect(video);
-    if (codes && codes.length > 0) {
-      $("barcode").value = codes[0].rawValue;
-      stopScan();
-      $("name").focus();
-      showMessage("バーコードを読み取りました");
-      return;
-    }
-  } catch (e) {
-    // 読取失敗時は次のフレームで再試行
-  }
-  scanTimer = setTimeout(scanLoop, 250);
+async function startScan(){
+  if(!('BarcodeDetector' in window)){ toast('このブラウザは自動読取非対応です。手入力を使ってください'); return; }
+  detector = new BarcodeDetector({formats:['ean_13','ean_8','code_128','qr_code','upc_a','upc_e']});
+  stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+  $('video').srcObject = stream; await $('video').play(); scanning = true; $('cameraStatus').textContent='カメラ読取中'; loopScan();
+}
+async function loopScan(){
+  if(!scanning) return;
+  try{
+    const codes = await detector.detect($('video'));
+    if(codes.length){ selectProduct(codes[0].rawValue); stopScan(); }
+  }catch(e){}
+  requestAnimationFrame(loopScan);
+}
+function stopScan(){ scanning=false; if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } $('cameraStatus').textContent='カメラ停止'; }
+
+function addSamples(){
+  const samples=[['4901111111111','コピー用紙 A4','PAPER-A4',12,'倉庫A-1'],['4902222222222','ボールペン 黒','PEN-BK',35,'事務所'],['4903333333333','梱包テープ','TAPE-01',8,'倉庫B-2']];
+  samples.forEach(([barcode,name,sku,stock,location])=>{ if(!findProduct(barcode)) data.products.push({barcode,name,sku,stock,location}); });
+  saveDB(); render(); toast('サンプルを追加しました');
 }
 
-function stopScan() {
-  scanning = false;
-  if (scanTimer) clearTimeout(scanTimer);
-  scanTimer = null;
-  if (stream) {
-    stream.getTracks().forEach((track) => track.stop());
-    stream = null;
-  }
-  $("preview").srcObject = null;
-  $("cameraBox").hidden = true;
-  $("stopScanBtn").hidden = true;
-}
-
-$("scanBtn").addEventListener("click", startCameraScan);
-$("stopScanBtn").addEventListener("click", stopScan);
-
+$('findProductBtn').onclick = () => selectProduct($('barcodeInput').value);
+$('saveStockBtn').onclick = saveStock;
+$('saveMasterBtn').onclick = saveMaster;
+$('startScanBtn').onclick = startScan;
+$('stopScanBtn').onclick = stopScan;
+$('exportStockBtn').onclick = exportStock;
+$('exportHistoryBtn').onclick = exportHistory;
+$('exportAllBtn').onclick = exportAll;
+$('sampleBtn').onclick = addSamples;
+$('stockSearch').oninput = render;
 render();
