@@ -82,12 +82,35 @@ function saveMaster(){
   saveDB(); render(); toast('商品マスタを保存しました');
 }
 
+function esc(v){
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function render(){
-  $('productsTable').innerHTML = '<tr><th>バーコード</th><th>商品名</th><th>SKU</th><th>在庫</th><th>場所</th></tr>' + data.products.map(p=>`<tr><td>${p.barcode}</td><td>${p.name}</td><td>${p.sku||''}</td><td>${p.stock}</td><td>${p.location||''}</td></tr>`).join('');
+  $('productsTable').innerHTML = '<tr><th>バーコード</th><th>商品名</th><th>SKU</th><th>在庫</th><th>場所</th><th>削除</th></tr>' + data.products.map(p=>`<tr><td>${esc(p.barcode)}</td><td>${esc(p.name)}</td><td>${esc(p.sku||'')}</td><td>${esc(p.stock)}</td><td>${esc(p.location||'')}</td><td><button class="danger small" onclick="deleteProduct('${esc(p.barcode)}')">削除</button></td></tr>`).join('');
   const q = $('stockSearch')?.value?.toLowerCase() || '';
   const ps = data.products.filter(p => [p.barcode,p.name,p.sku,p.location].join(' ').toLowerCase().includes(q));
-  $('stockTable').innerHTML = '<tr><th>バーコード</th><th>商品名</th><th>在庫</th><th>場所</th></tr>' + ps.map(p=>`<tr><td>${p.barcode}</td><td>${p.name}</td><td><b>${p.stock}</b></td><td>${p.location||''}</td></tr>`).join('');
-  $('historyTable').innerHTML = '<tr><th>日時</th><th>処理</th><th>商品名</th><th>数量</th><th>前</th><th>後</th><th>メモ</th></tr>' + data.history.map(h=>`<tr><td>${h.date}</td><td>${h.action}</td><td>${h.name}</td><td>${h.qty}</td><td>${h.before}</td><td>${h.after}</td><td>${h.memo||''}</td></tr>`).join('');
+  $('stockTable').innerHTML = '<tr><th>バーコード</th><th>商品名</th><th>在庫</th><th>場所</th></tr>' + ps.map(p=>`<tr><td>${esc(p.barcode)}</td><td>${esc(p.name)}</td><td><b>${esc(p.stock)}</b></td><td>${esc(p.location||'')}</td></tr>`).join('');
+  $('historyTable').innerHTML = '<tr><th>日時</th><th>処理</th><th>商品名</th><th>数量</th><th>前</th><th>後</th><th>メモ</th></tr>' + data.history.map(h=>`<tr><td>${esc(h.date)}</td><td>${esc(h.action)}</td><td>${esc(h.name)}</td><td>${esc(h.qty)}</td><td>${esc(h.before)}</td><td>${esc(h.after)}</td><td>${esc(h.memo||'')}</td></tr>`).join('');
+}
+
+function deleteProduct(barcode){
+  const p = findProduct(barcode);
+  if(!p){ toast('商品が見つかりません'); return; }
+  if(!confirm(`「${p.name}」を削除しますか？`)) return;
+  data.products = data.products.filter(item => item.barcode !== barcode);
+  if(currentProduct && currentProduct.barcode === barcode){ currentProduct = null; $('currentName').textContent='未選択'; $('currentMeta').textContent='バーコードを読んでください'; $('currentStock').textContent='-'; }
+  saveDB(); render(); toast('商品を削除しました');
+}
+
+function deleteAllProducts(){
+  if(data.products.length === 0){ toast('削除する商品がありません'); return; }
+  if(!confirm('商品マスタを全て削除しますか？
+履歴は残ります。')) return;
+  data.products = [];
+  currentProduct = null;
+  $('currentName').textContent='未選択'; $('currentMeta').textContent='バーコードを読んでください'; $('currentStock').textContent='-';
+  saveDB(); render(); toast('商品を全て削除しました');
 }
 
 async function startScan(){
@@ -155,12 +178,6 @@ function stopScan(){
   $('cameraStatus').textContent='カメラ停止';
 }
 
-function addSamples(){
-  const samples=[['4901111111111','コピー用紙 A4','PAPER-A4',12,'倉庫A-1'],['4902222222222','ボールペン 黒','PEN-BK',35,'事務所'],['4903333333333','梱包テープ','TAPE-01',8,'倉庫B-2']];
-  samples.forEach(([barcode,name,sku,stock,location])=>{ if(!findProduct(barcode)) data.products.push({barcode,name,sku,stock,location}); });
-  saveDB(); render(); toast('サンプルを追加しました');
-}
-
 $('findProductBtn').onclick = () => selectProduct($('barcodeInput').value);
 $('saveStockBtn').onclick = saveStock;
 $('saveMasterBtn').onclick = saveMaster;
@@ -169,6 +186,6 @@ $('stopScanBtn').onclick = stopScan;
 $('exportStockBtn').onclick = exportStock;
 $('exportHistoryBtn').onclick = exportHistory;
 $('exportAllBtn').onclick = exportAll;
-$('sampleBtn').onclick = addSamples;
+$('deleteAllProductsBtn').onclick = deleteAllProducts;
 $('stockSearch').oninput = render;
 render();
