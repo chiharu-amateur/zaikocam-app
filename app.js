@@ -4,6 +4,7 @@ let currentProduct = null;
 let stream = null;
 let detector = null;
 let scanning = false;
+let zxingReader = null;
 
 const $ = id => document.getElementById(id);
 const saveDB = () => localStorage.setItem(DB_KEY, JSON.stringify(data));
@@ -90,20 +91,69 @@ function render(){
 }
 
 async function startScan(){
-  if(!('BarcodeDetector' in window)){ toast('このブラウザは自動読取非対応です。手入力を使ってください'); return; }
-  detector = new BarcodeDetector({formats:['ean_13','ean_8','code_128','qr_code','upc_a','upc_e']});
-  stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-  $('video').srcObject = stream; await $('video').play(); scanning = true; $('cameraStatus').textContent='カメラ読取中'; loopScan();
+  stopScan();
+  const video = $('video');
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    toast('このブラウザではカメラが使えません。Chromeで開いてください');
+    return;
+  }
+
+  try{
+    $('cameraStatus').textContent='カメラ起動中';
+
+    // まずAndroidでも動きやすいZXingライブラリで読み取り
+    if(window.ZXing && ZXing.BrowserMultiFormatReader){
+      zxingReader = new ZXing.BrowserMultiFormatReader();
+      scanning = true;
+      $('cameraStatus').textContent='カメラ読取中';
+      toast('カメラをバーコードに向けてください');
+      await zxingReader.decodeFromVideoDevice(null, video, (result, err) => {
+        if(result && scanning){
+          selectProduct(result.getText());
+          stopScan();
+        }
+      });
+      return;
+    }
+
+    // CDNが読み込めない時はBarcodeDetectorで試す
+    if('BarcodeDetector' in window){
+      detector = new BarcodeDetector({formats:['ean_13','ean_8','code_128','qr_code','upc_a','upc_e','qr_code']});
+      stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});
+      video.srcObject = stream;
+      await video.play();
+      scanning = true;
+      $('cameraStatus').textContent='カメラ読取中';
+      toast('カメラをバーコードに向けてください');
+      loopScan();
+      return;
+    }
+
+    toast('読取ライブラリを読み込めませんでした。再読み込みしてください');
+    $('cameraStatus').textContent='カメラ未対応';
+  }catch(e){
+    console.error(e);
+    $('cameraStatus').textContent='カメラエラー';
+    toast('カメラ許可をオンにして、もう一度押してください');
+    stopScan();
+  }
 }
 async function loopScan(){
   if(!scanning) return;
   try{
     const codes = await detector.detect($('video'));
-    if(codes.length){ selectProduct(codes[0].rawValue); stopScan(); }
+    if(codes.length){ selectProduct(codes[0].rawValue); stopScan(); return; }
   }catch(e){}
   requestAnimationFrame(loopScan);
 }
-function stopScan(){ scanning=false; if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } $('cameraStatus').textContent='カメラ停止'; }
+function stopScan(){
+  scanning=false;
+  if(zxingReader){ try{ zxingReader.reset(); }catch(e){} zxingReader=null; }
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  const video = $('video');
+  if(video){ video.pause(); video.srcObject = null; }
+  $('cameraStatus').textContent='カメラ停止';
+}
 
 function addSamples(){
   const samples=[['4901111111111','コピー用紙 A4','PAPER-A4',12,'倉庫A-1'],['4902222222222','ボールペン 黒','PEN-BK',35,'事務所'],['4903333333333','梱包テープ','TAPE-01',8,'倉庫B-2']];
