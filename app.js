@@ -105,8 +105,7 @@ function deleteProduct(barcode){
 
 function deleteAllProducts(){
   if(data.products.length === 0){ toast('削除する商品がありません'); return; }
-  if(!confirm('商品マスタを全て削除しますか？
-履歴は残ります。')) return;
+  if(!confirm('商品マスタを全て削除しますか？\n履歴は残ります。')) return;
   data.products = [];
   currentProduct = null;
   $('currentName').textContent='未選択'; $('currentMeta').textContent='バーコードを読んでください'; $('currentStock').textContent='-';
